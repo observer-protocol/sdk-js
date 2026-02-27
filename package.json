@@ -1,0 +1,20 @@
+{
+  "version": "1.0.0",
+  "name": "@observerprotocol/sdk",
+  "description": "JavaScript SDK for Observer Protocol - Cryptographic verification for AI agents",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "keywords": ["ai-agent", "bitcoin", "lightning", "verification", "identity", "l402"],
+  "author": "Observer Protocol",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/observerprotocol/sdk-js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}
