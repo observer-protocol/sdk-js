@@ -5,7 +5,8 @@
  * @observerprotocol/sdk v1.0.0
  */
 
-const fetch = require('node-fetch');
+// Use built-in fetch (Node 18+) or fallback to node-fetch
+const fetch = globalThis.fetch || require('node-fetch');
 
 const DEFAULT_API_URL = 'https://api.observerprotocol.org';
 
@@ -21,16 +22,22 @@ class ObserverProtocol {
    * @param {string} agentData.publicKey - Agent's public key (hex)
    * @param {string} agentData.alias - Human-readable agent name
    * @param {string} agentData.lightningNodePubkey - Lightning node pubkey
+   * @param {string} agentData.framework - Agent framework (optional)
    * @returns {Promise<Object>} Registered agent data
    */
   async registerAgent(agentData) {
-    const response = await fetch(`${this.apiUrl}/agents/register`, {
+    const params = new URLSearchParams();
+    params.append('public_key', agentData.publicKey);
+    if (agentData.alias) params.append('agent_name', agentData.alias);
+    if (agentData.alias) params.append('alias', agentData.alias);
+    if (agentData.framework) params.append('framework', agentData.framework);
+    if (agentData.lightningNodePubkey) params.append('lightning_pubkey', agentData.lightningNodePubkey);
+
+    const response = await fetch(`${this.apiUrl}/observer/register-agent?${params}`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         ...(this.apiKey && { 'X-API-Key': this.apiKey })
-      },
-      body: JSON.stringify(agentData)
+      }
     });
 
     if (!response.ok) {
@@ -38,27 +45,34 @@ class ObserverProtocol {
       throw new Error(`Registration failed: ${error}`);
     }
 
-    return response.json();
+    const data = await response.json();
+    // Normalize response to match documented interface
+    return {
+      id: data.agent_id,
+      badge_url: `${this.apiUrl}/observer/badge/${data.agent_id}.svg`,
+      public_key_hash: data.agent_id, // agent_id is the hashed public key
+      created_at: new Date().toISOString(),
+      ...data
+    };
   }
 
   /**
    * Verify agent identity cryptographically
    * @param {string} agentId - Agent ID from registration
-   * @param {string} challengeMessage - Message to sign for verification
+   * @param {string} challengeMessage - Message to sign for verification (not used in MVP)
    * @param {string} signature - Cryptographic signature
    * @returns {Promise<Object>} Verification result
    */
   async verifyAgent(agentId, challengeMessage, signature) {
-    const response = await fetch(`${this.apiUrl}/agents/${agentId}/verify`, {
+    const params = new URLSearchParams();
+    params.append('agent_id', agentId);
+    params.append('signed_challenge', signature);
+
+    const response = await fetch(`${this.apiUrl}/observer/verify-agent?${params}`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         ...(this.apiKey && { 'X-API-Key': this.apiKey })
-      },
-      body: JSON.stringify({
-        challenge_message: challengeMessage,
-        signature: signature
-      })
+      }
     });
 
     if (!response.ok) {
@@ -80,13 +94,21 @@ class ObserverProtocol {
    * @returns {Promise<Object>} Recorded transaction
    */
   async recordTransaction(transaction) {
-    const response = await fetch(`${this.apiUrl}/transactions`, {
+    const params = new URLSearchParams();
+    params.append('agent_id', transaction.senderId || transaction.agent_id);
+    params.append('protocol', 'lightning');
+    params.append('transaction_reference', transaction.paymentHash);
+    params.append('timestamp', new Date().toISOString());
+    params.append('signature', transaction.proof);
+    if (transaction.recipientId) {
+      params.append('optional_metadata', JSON.stringify({ recipient: transaction.recipientId }));
+    }
+
+    const response = await fetch(`${this.apiUrl}/observer/submit-transaction?${params}`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         ...(this.apiKey && { 'X-API-Key': this.apiKey })
-      },
-      body: JSON.stringify(transaction)
+      }
     });
 
     if (!response.ok) {
@@ -103,7 +125,8 @@ class ObserverProtocol {
    * @returns {Promise<Object>} Reputation metrics
    */
   async getReputation(agentId) {
-    const response = await fetch(`${this.apiUrl}/agents/${agentId}/reputation`, {
+    // Use the agent profile endpoint and extract reputation data
+    const response = await fetch(`${this.apiUrl}/observer/agents/${agentId}`, {
       headers: {
         ...(this.apiKey && { 'X-API-Key': this.apiKey })
       }
@@ -114,7 +137,26 @@ class ObserverProtocol {
       throw new Error(`Reputation fetch failed: ${error}`);
     }
 
-    return response.json();
+    const data = await response.json();
+    // Normalize to expected interface
+    return {
+      transaction_count: data.verified_tx_count || 0,
+      success_rate: data.verified ? 100 : 0,
+      score: data.verified ? 100 : 0,
+      badge_level: this._getBadgeLevel(data.verified_tx_count || 0),
+      ...data
+    };
+  }
+
+  /**
+   * Get badge level based on transaction count
+   * @private
+   */
+  _getBadgeLevel(txCount) {
+    if (txCount >= 1000) return 'platinum';
+    if (txCount >= 100) return 'gold';
+    if (txCount >= 10) return 'silver';
+    return 'bronze';
   }
 
   /**
@@ -127,11 +169,10 @@ class ObserverProtocol {
    */
   async queryTransactions(filters = {}) {
     const params = new URLSearchParams();
-    if (filters.agentId) params.append('agent_id', filters.agentId);
-    if (filters.since) params.append('since', filters.since);
     if (filters.limit) params.append('limit', filters.limit);
-
-    const response = await fetch(`${this.apiUrl}/transactions?${params}`, {
+    // Note: The feed endpoint doesn't support agent filtering in MVP
+    
+    const response = await fetch(`${this.apiUrl}/observer/feed?${params}`, {
       headers: {
         ...(this.apiKey && { 'X-API-Key': this.apiKey })
       }
@@ -142,7 +183,56 @@ class ObserverProtocol {
       throw new Error(`Transaction query failed: ${error}`);
     }
 
+    const data = await response.json();
+    return data.events || [];
+  }
+
+  /**
+   * Get trends data
+   * @returns {Promise<Object>} Trends data
+   */
+  async getTrends() {
+    const response = await fetch(`${this.apiUrl}/observer/trends`, {
+      headers: {
+        ...(this.apiKey && { 'X-API-Key': this.apiKey })
+      }
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Trends fetch failed: ${error}`);
+    }
+
     return response.json();
+  }
+
+  /**
+   * Get agent profile
+   * @param {string} agentId - Agent ID
+   * @returns {Promise<Object>} Agent profile
+   */
+  async getAgentProfile(agentId) {
+    const response = await fetch(`${this.apiUrl}/observer/agents/${agentId}`, {
+      headers: {
+        ...(this.apiKey && { 'X-API-Key': this.apiKey })
+      }
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Profile fetch failed: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Get badge SVG URL
+   * @param {string} agentId - Agent ID
+   * @returns {string} Badge URL
+   */
+  getBadgeUrl(agentId) {
+    return `${this.apiUrl}/observer/badge/${agentId}.svg`;
   }
 }
 
