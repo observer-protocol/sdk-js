@@ -236,7 +236,7 @@ class ObserverProtocol {
   }
 
   /**
-   * Submit Lightning payment attestation (generic)
+   * Submit Lightning payment attestation with cryptographic signature
    * @param {Object} payment - Payment data
    * @param {string} payment.agentId - Your agent ID
    * @param {string} payment.paymentHash - Lightning payment hash
@@ -245,15 +245,64 @@ class ObserverProtocol {
    * @param {string} payment.direction - 'inbound' or 'outbound'
    * @param {string} payment.counterparty - Counterparty identifier (optional)
    * @param {string} payment.memo - Payment memo (optional)
-   * @returns {Promise<Object>} Submission result
+   * @param {string} payment.publicKey - Your secp256k1 public key (hex, 33-byte compressed)
+   * @param {Function} payment.signFunction - Async function to sign message with your private key
+   * @returns {Promise<Object>} Submission result with cryptographic_verification flag
+   * 
+   * @example
+   * // Using @noble/secp256k1
+   * import * as secp256k1 from '@noble/secp256k1';
+   * 
+   * const result = await observer.submitLightningAttestation({
+   *   agentId: 'my-agent-001',
+   *   paymentHash: invoice.r_hash,
+   *   preimage: invoice.r_preimage,
+   *   amountSats: 1000,
+   *   direction: 'inbound',
+   *   publicKey: '033f87be3bdc64355fe611071e1b71bf0637119c021c73c56a9e72acb63ab179be',
+   *   signFunction: async (message) => {
+   *     const messageBytes = Buffer.from(message, 'utf-8');
+   *     const privateKeyBytes = Buffer.from(privateKeyHex, 'hex');
+   *     const signature = await secp256k1.signAsync(messageBytes, privateKeyBytes);
+   *     return Buffer.from(signature).toString('hex');
+   *   }
+   * });
+   * // Returns: { event_id, verified: true, cryptographic_verification: true }
    */
   async submitLightningAttestation(payment) {
-    const params = new URLSearchParams({
+    // Build attestation that will be signed
+    const attestation = {
       agent_id: payment.agentId,
       protocol: 'lightning',
       transaction_reference: payment.paymentHash,
       timestamp: new Date().toISOString(),
-      signature: payment.preimage || 'placeholder_sig',
+      preimage: payment.preimage,
+      direction: payment.direction || 'inbound',
+      amount_sats: payment.amountSats || 0,
+      counterparty: payment.counterparty || 'unknown',
+      memo: payment.memo || null,
+      public_key: payment.publicKey,
+    };
+
+    // Sign the attestation
+    const message = JSON.stringify(attestation);
+    let signature;
+    
+    if (payment.signFunction) {
+      signature = await payment.signFunction(message);
+    } else if (payment.signature) {
+      // Allow passing pre-computed signature
+      signature = payment.signature;
+    } else {
+      throw new Error('Either signFunction or signature must be provided');
+    }
+
+    const params = new URLSearchParams({
+      agent_id: payment.agentId,
+      protocol: 'lightning',
+      transaction_reference: payment.paymentHash,
+      timestamp: attestation.timestamp,
+      signature: signature,
       optional_metadata: JSON.stringify({
         amount_sats: payment.amountSats,
         direction: payment.direction || 'inbound',

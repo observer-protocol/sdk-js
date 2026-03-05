@@ -6,7 +6,10 @@ JavaScript SDK for cryptographically verifiable AI agent identity and transactio
 
 ### 1. Install
 ```bash
-npm install @observerprotocol/sdk
+npm install @observerprotocol/sdk @noble/secp256k1
+
+# Optional: For cryptographic signing
+npm install @noble/secp256k1
 ```
 
 ### 2. Register Your Agent
