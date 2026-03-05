@@ -234,6 +234,94 @@ class ObserverProtocol {
   getBadgeUrl(agentId) {
     return `${this.apiUrl}/observer/badge/${agentId}.svg`;
   }
+
+  /**
+   * Submit Lightning payment attestation (generic)
+   * @param {Object} payment - Payment data
+   * @param {string} payment.agentId - Your agent ID
+   * @param {string} payment.paymentHash - Lightning payment hash
+   * @param {string} payment.preimage - Lightning preimage (proof)
+   * @param {number} payment.amountSats - Amount in satoshis
+   * @param {string} payment.direction - 'inbound' or 'outbound'
+   * @param {string} payment.counterparty - Counterparty identifier (optional)
+   * @param {string} payment.memo - Payment memo (optional)
+   * @returns {Promise<Object>} Submission result
+   */
+  async submitLightningAttestation(payment) {
+    const params = new URLSearchParams({
+      agent_id: payment.agentId,
+      protocol: 'lightning',
+      transaction_reference: payment.paymentHash,
+      timestamp: new Date().toISOString(),
+      signature: payment.preimage || 'placeholder_sig',
+      optional_metadata: JSON.stringify({
+        amount_sats: payment.amountSats,
+        direction: payment.direction || 'inbound',
+        counterparty: payment.counterparty || 'unknown',
+        memo: payment.memo || '',
+        preimage_available: !!payment.preimage,
+      }),
+    });
+
+    const response = await fetch(`${this.apiUrl}/observer/submit-transaction?${params}`, {
+      method: 'POST',
+      headers: {
+        ...(this.apiKey && { 'X-API-Key': this.apiKey }),
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Attestation submission failed: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Submit x402 payment attestation
+   * @param {Object} payment - x402 payment data
+   * @param {string} payment.agentId - Your agent ID
+   * @param {string} payment.transactionHash - On-chain transaction hash
+   * @param {number} payment.amountUsdc - Amount in USDC (base units)
+   * @param {string} payment.network - Network (e.g., 'base', 'ethereum')
+   * @param {string} payment.payerAddress - Payer wallet address
+   * @param {string} payment.payeeAddress - Payee wallet address
+   * @param {string} payment.direction - 'inbound' or 'outbound'
+   * @returns {Promise<Object>} Submission result
+   */
+  async submitX402Attestation(payment) {
+    const params = new URLSearchParams({
+      agent_id: payment.agentId,
+      protocol: 'x402',
+      transaction_reference: payment.transactionHash,
+      timestamp: new Date().toISOString(),
+      signature: payment.signature || 'placeholder_sig',
+      optional_metadata: JSON.stringify({
+        amount_usdc: payment.amountUsdc,
+        network: payment.network,
+        payer_address: payment.payerAddress,
+        payee_address: payment.payeeAddress,
+        direction: payment.direction || 'inbound',
+      }),
+    });
+
+    const response = await fetch(`${this.apiUrl}/observer/submit-transaction?${params}`, {
+      method: 'POST',
+      headers: {
+        ...(this.apiKey && { 'X-API-Key': this.apiKey }),
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`x402 attestation submission failed: ${error}`);
+    }
+
+    return response.json();
+  }
 }
 
 module.exports = { ObserverProtocol };
